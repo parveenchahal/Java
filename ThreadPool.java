@@ -1,6 +1,6 @@
 class ThreadPool {
 
-    private Map<Long, PoolThread> pool = new ConcurrentHashMap<>();
+    final private AtomicInteger poolCount;
 
     final private int capacity;
 
@@ -9,25 +9,30 @@ class ThreadPool {
             throw new IllegalArgumentException("capacity should be greater than zero");
         }
         this.capacity = capacity;
+        this.poolCount = new AtomicInteger(this.capacity);
     }
 
     public void submitTask(Runnable task) throws InterruptedException {
         synchronized (this) {
-            while (pool.size() >= capacity) {
+            while (poolCount.get() <= 0) {
                 this.wait();
             }
             PoolThread th = new PoolThread(task, this);
-            pool.put(th.getId(), th);
+            poolCount.getAndDecrement();
             th.start();
         }
     }
 
     public void join() throws InterruptedException {
         synchronized (this) {
-            while (pool.size() > 0) {
+            while (poolCount.get() < capacity) {
                 wait();
             }
         }
+    }
+
+    public int aliveThreads() {
+        return capacity - poolCount.get();
     }
 
     private class PoolThread extends Thread {
@@ -44,19 +49,15 @@ class ThreadPool {
         public void run() {
             try {
                 task.run();
-                pool.remove(this.getId());
             } catch (Exception ex) {
                 ex.printStackTrace();
-                pool.remove(this.getId());
-                try {
-                    this.join();
-                } catch (InterruptedException ex1) {
-                    Logger.getLogger(ThreadPool.class.getName()).log(Level.SEVERE, null, ex1);
+            } finally {
+                poolCount.getAndIncrement();
+                synchronized (threadPool) {
+                    threadPool.notify();
                 }
             }
-            synchronized (threadPool) {
-                threadPool.notify();
-            }
+
         }
     }
 }
