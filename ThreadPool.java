@@ -1,8 +1,15 @@
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
+
 class ThreadPool {
 
     final private AtomicInteger poolCount;
 
     final private int capacity;
+    
+    private ReentrantLock submitTaskRLock = new ReentrantLock();
+    
+    private ReentrantLock joinRLock = new ReentrantLock();
 
     public ThreadPool(int capacity) {
         if (capacity <= 0) {
@@ -13,20 +20,51 @@ class ThreadPool {
     }
 
     public void submitTask(Runnable task) throws InterruptedException {
-        synchronized (this) {
-            while (poolCount.get() <= 0) {
-                this.wait();
+        synchronized(submitTaskRLock) {
+            try {
+                while (poolCount.get() <= 0) {
+                    submitTaskRLock.wait();
+                }
+                PoolThread th = new PoolThread(task, this);
+                poolCount.getAndDecrement();
+                th.start();
+            } catch(Exception e) {
+                e.printStackTrace();
             }
-            PoolThread th = new PoolThread(task, this);
-            poolCount.getAndDecrement();
-            th.start();
         }
+    }
+    
+    private class SubmitMultipleTask implements Runnable {
+        
+        ThreadPool threadPool;
+        Runnable[] task;
+        
+        public SubmitMultipleTask(ThreadPool threadPool, Runnable[] task) {
+            this.threadPool = threadPool;
+            this.task = task;
+        }
+        
+        @Override
+        public void run() {
+            try {
+                int N = task.length;
+                for(int i = 0; i < N; i++) {
+                    threadPool.submitTask(task[i]);
+                }
+            } catch(InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+    
+    public void submitTask(Runnable[] task) throws InterruptedException {
+        submitTask(new SubmitMultipleTask(this, task));
     }
 
     public void join() throws InterruptedException {
-        synchronized (this) {
+        synchronized(joinRLock) {
             while (poolCount.get() < capacity) {
-                wait();
+                joinRLock.wait();
             }
         }
     }
@@ -53,8 +91,8 @@ class ThreadPool {
                 ex.printStackTrace();
             } finally {
                 poolCount.getAndIncrement();
-                synchronized (threadPool) {
-                    threadPool.notify();
+                synchronized (threadPool.submitTaskRLock) {
+                    threadPool.submitTaskRLock.notify();
                 }
             }
 
